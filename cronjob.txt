@@ -1,0 +1,2 @@
+# Run the file-uploader service every day at 8 PM
+0 20 * * * docker compose -f /path/to/your/aws-cron-pipeline/docker-compose.yml run --rm file-uploader
