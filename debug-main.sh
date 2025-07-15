@@ -68,14 +68,13 @@ aws --version
 log "🔍 AWS configuration check:"
 aws configure list
 
-# ====== DEBUG: Check AWS env vars used by CLI ======
 log "🔍 DEBUG: AWS environment used:"
 env | grep AWS_
 
 # ====== VERIFY AWS CREDENTIALS ======
 log "🔐 Verifying AWS credentials..."
 log "🔍 DEBUG: Running 'aws sts get-caller-identity'..."
-aws_test_output=$(aws sts get-caller-identity 2>&1)
+aws_test_output=$(aws sts get-caller-identity --region "$AWS_DEFAULT_REGION" 2>&1)
 aws_test_exit_code=$?
 
 if [[ $aws_test_exit_code -eq 0 ]]; then
@@ -110,18 +109,18 @@ log "☁️ Destination: $s3_destination"
 file_count=$(find "$SOURCE_DIR" -type f | wc -l)
 log "📄 Files to upload: $file_count"
 
-# ====== DEBUG: Confirm full S3 upload path ======
 log "🔍 DEBUG: Final S3 destination path is:"
 log "aws s3 cp \"$SOURCE_DIR\" \"$s3_destination\" --recursive --storage-class STANDARD_IA"
 
-# ====== TEST S3 BUCKET ACCESS ======
+# ====== TEST S3 BUCKET ACCESS (improved with s3api) ======
 log "🔍 Testing S3 bucket access..."
-if aws s3 ls "s3://${S3_BUCKET}" --max-items 1 &> /dev/null; then
+bucket_check_output=$(aws s3api list-objects --bucket "$S3_BUCKET" --max-items 1 --region "$AWS_DEFAULT_REGION" 2>&1)
+if [[ $? -eq 0 ]]; then
     log "✅ S3 bucket access confirmed."
 else
     log "❌ ERROR: Cannot access S3 bucket: ${S3_BUCKET}"
-    log "⚠️ DEBUG: Attempting 'aws s3 ls' to list all buckets..."
-    aws s3 ls
+    log "❌ AWS Error Output:"
+    echo "$bucket_check_output"
     exit 1
 fi
 
@@ -129,13 +128,13 @@ fi
 log "⬆️ Uploading files..."
 log "🔍 DEBUG: Upload command: aws s3 cp \"$SOURCE_DIR\" \"$s3_destination\" --recursive --storage-class STANDARD_IA"
 
-if aws s3 cp "$SOURCE_DIR" "$s3_destination" --recursive --storage-class STANDARD_IA 2>&1 | tee -a "$LOG_FILE"; then
+if aws s3 cp "$SOURCE_DIR" "$s3_destination" --recursive --storage-class STANDARD_IA --region "$AWS_DEFAULT_REGION" 2>&1 | tee -a "$LOG_FILE"; then
     log "✅ Upload completed successfully."
     log "🔗 S3 Location: $s3_destination"
 
     if [[ "${VERIFY_UPLOAD}" == "true" ]]; then
         log "🔍 Verifying upload contents..."
-        aws s3 ls "$s3_destination" --recursive --human-readable --summarize | tee -a "$LOG_FILE"
+        aws s3 ls "$s3_destination" --recursive --human-readable --summarize --region "$AWS_DEFAULT_REGION" | tee -a "$LOG_FILE"
     fi
 
     log "📊 Upload summary logged to: $LOG_FILE"
