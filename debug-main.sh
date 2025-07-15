@@ -99,8 +99,7 @@ if [[ -z "$(ls -A "$SOURCE_DIR")" ]]; then
 fi
 
 # ====== PREPARE S3 DESTINATION ======
-timestamp=$(date +%s)
-s3_prefix="${S3_PREFIX}/${timestamp}"
+s3_prefix="${S3_PREFIX}"
 s3_destination="s3://${S3_BUCKET}/${s3_prefix}"
 
 log "📂 Source: $SOURCE_DIR"
