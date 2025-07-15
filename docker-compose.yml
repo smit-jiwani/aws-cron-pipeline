@@ -1,11 +1,22 @@
+version: '3.8'
+
 services:
-  file-uploader:
+  s3-uploader:
     build: .
+    container_name: s3-file-uploader
+    env_file:
+      - .env
     volumes:
-      - ${SOURCE_DIR}:/files
-    environment:
-      - AWS_ACCESS_KEY_ID
-      - AWS_SECRET_ACCESS_KEY
-      - AWS_DEFAULT_REGION
-      - S3_BUCKET
-      - SOURCE_DIR
+      # Optional: Mount local files directory if you want to upload from host
+      - ./files:/app/files:ro
+      # Optional: Mount logs directory to persist logs
+      - ./logs:/app/logs
+    # Container will stop automatically after script completes
+    restart: "no"
+    
+    # Optional: Add resource limits
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+          cpus: '0.5'

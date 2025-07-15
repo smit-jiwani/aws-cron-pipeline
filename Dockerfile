@@ -1,23 +1,33 @@
-# Use official Golang image as build stage
-FROM golang:1.21 as builder
-WORKDIR /app
-COPY . .
-RUN cd cmd && go build -o file-uploader main.go
-
-# Use a minimal image for running
+# Use Ubuntu as base image
 FROM ubuntu:22.04
+
 WORKDIR /app
-COPY --from=builder /app/cmd/file-uploader ./file-uploader
-COPY files ./files
+
+# Install required packages
+RUN apt-get update && \
+    apt-get install -y \
+    curl \
+    unzip \
+    bash \
+    findutils \
+    && rm -rf /var/lib/apt/lists/*
 
 # Install AWS CLI
-RUN apt-get update && \
-    apt-get install -y curl unzip && \
-    curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip" && \
+RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip" && \
     unzip awscliv2.zip && \
     ./aws/install && \
     rm -rf awscliv2.zip aws
 
+# Copy the upload script and files
+COPY main.sh ./main.sh
+COPY .env ./.env
+COPY files ./files
+
+# Make the script executable
+RUN chmod +x ./main.sh
+
+# Set environment variables
 ENV PATH="/usr/local/bin:$PATH"
 
-CMD ["/app/file-uploader"]
+# Run the upload script
+CMD ["./main.sh"]
