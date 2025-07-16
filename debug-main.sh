@@ -36,12 +36,7 @@ log "SOURCE_DIR: ${SOURCE_DIR}"
 log "VERIFY_UPLOAD: ${VERIFY_UPLOAD}"
 
 # ====== VALIDATE REQUIRED VARIABLES ======
-required_vars=(
-    "AWS_ACCESS_KEY_ID"
-    "AWS_SECRET_ACCESS_KEY"
-    "AWS_DEFAULT_REGION"
-    "S3_BUCKET"
-)
+required_vars=(AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_DEFAULT_REGION S3_BUCKET)
 
 SOURCE_DIR="${SOURCE_DIR:-$SCRIPT_DIR/files}"
 S3_PREFIX="${S3_PREFIX:-uploads}"
@@ -73,17 +68,13 @@ env | grep AWS_
 
 # ====== VERIFY AWS CREDENTIALS ======
 log "🔐 Verifying AWS credentials..."
-log "🔍 DEBUG: Running 'aws sts get-caller-identity'..."
 aws_test_output=$(aws sts get-caller-identity --region "$AWS_DEFAULT_REGION" 2>&1)
-aws_test_exit_code=$?
-
-if [[ $aws_test_exit_code -eq 0 ]]; then
+if [[ $? -eq 0 ]]; then
     log "✅ AWS credentials verified successfully."
     log "🔍 AWS Identity: $aws_test_output"
 else
-    log "❌ ERROR: AWS credentials test failed with exit code: $aws_test_exit_code"
+    log "❌ ERROR: AWS credentials test failed"
     log "❌ AWS Error Output: $aws_test_output"
-    log "⚠️ DEBUG: You may want to recheck your secret key or region configuration."
     exit 1
 fi
 
@@ -98,47 +89,60 @@ if [[ -z "$(ls -A "$SOURCE_DIR")" ]]; then
     exit 1
 fi
 
-# ====== PREPARE S3 DESTINATION ======
-s3_prefix="${S3_PREFIX}"
-s3_destination="s3://${S3_BUCKET}/${s3_prefix}"
+# ====== FIND LAST MODIFIED FILE ON S3 ======
+log "🕵️ Finding latest modified object in S3..."
 
-log "📂 Source: $SOURCE_DIR"
-log "☁️ Destination: $s3_destination"
+latest_s3_time=$(aws s3api list-objects-v2 \
+    --bucket "$S3_BUCKET" \
+    --prefix "$S3_PREFIX/" \
+    --query 'Contents[?LastModified!=`null`].[LastModified]' \
+    --output text \
+    --region "$AWS_DEFAULT_REGION" | sort | tail -n 1)
 
-file_count=$(find "$SOURCE_DIR" -type f | wc -l)
-log "📄 Files to upload: $file_count"
-
-log "🔍 DEBUG: Final S3 destination path is:"
-log "aws s3 cp \"$SOURCE_DIR\" \"$s3_destination\" --recursive --storage-class STANDARD_IA"
-
-# ====== TEST S3 BUCKET ACCESS (improved with s3api) ======
-log "🔍 Testing S3 bucket access..."
-bucket_check_output=$(aws s3api list-objects --bucket "$S3_BUCKET" --max-items 1 --region "$AWS_DEFAULT_REGION" 2>&1)
-if [[ $? -eq 0 ]]; then
-    log "✅ S3 bucket access confirmed."
+if [[ -z "$latest_s3_time" ]]; then
+    log "ℹ️ No files found in S3. Will upload all files."
+    s3_latest_epoch=0
 else
-    log "❌ ERROR: Cannot access S3 bucket: ${S3_BUCKET}"
-    log "❌ AWS Error Output:"
-    echo "$bucket_check_output"
-    exit 1
+    log "🕒 Latest modified time on S3: $latest_s3_time"
+    s3_latest_epoch=$(date -d "$latest_s3_time" +%s)
+    log "🔢 S3 last modified (epoch): $s3_latest_epoch"
 fi
 
-# ====== UPLOAD TO S3 ======
-log "⬆️ Uploading files..."
-log "🔍 DEBUG: Upload command: aws s3 cp \"$SOURCE_DIR\" \"$s3_destination\" --recursive --storage-class STANDARD_IA"
+# ====== UPLOAD NEW FILES ONLY ======
+log "🚚 Uploading only files with epoch newer than S3 last update..."
 
-if aws s3 cp "$SOURCE_DIR" "$s3_destination" --recursive --storage-class STANDARD_IA --region "$AWS_DEFAULT_REGION" 2>&1 | tee -a "$LOG_FILE"; then
-    log "✅ Upload completed successfully."
-    log "🔗 S3 Location: $s3_destination"
+uploaded_count=0
+skipped_count=0
 
-    if [[ "${VERIFY_UPLOAD}" == "true" ]]; then
-        log "🔍 Verifying upload contents..."
-        aws s3 ls "$s3_destination" --recursive --human-readable --summarize --region "$AWS_DEFAULT_REGION" | tee -a "$LOG_FILE"
+find "$SOURCE_DIR" -type f | while read -r filepath; do
+    # Expect folder structure like: /rms/1721121234/app.log
+    epoch_dir=$(echo "$filepath" | awk -F'/' '{for(i=1;i<=NF;i++) if ($i ~ /^[0-9]{10,}$/) print $i}' | head -n 1)
+
+    if [[ -n "$epoch_dir" && "$epoch_dir" =~ ^[0-9]+$ ]]; then
+        if [[ "$epoch_dir" -gt "$s3_latest_epoch" ]]; then
+            s3_key="${filepath#$SOURCE_DIR/}"
+            s3_uri="s3://${S3_BUCKET}/${S3_PREFIX}/${s3_key}"
+
+            log "⬆️ Uploading: $filepath → $s3_uri"
+            aws s3 cp "$filepath" "$s3_uri" --storage-class STANDARD_IA --region "$AWS_DEFAULT_REGION" | tee -a "$LOG_FILE"
+
+            if [[ "$VERIFY_UPLOAD" == "true" ]]; then
+                log "🔍 Verifying upload: $s3_uri"
+                aws s3 ls "$s3_uri" --region "$AWS_DEFAULT_REGION" | tee -a "$LOG_FILE"
+            fi
+
+            ((uploaded_count++))
+        else
+            log "⏩ Skipping old file (epoch=$epoch_dir < $s3_latest_epoch): $filepath"
+            ((skipped_count++))
+        fi
+    else
+        log "⚠️ Could not extract valid epoch from path: $filepath"
+        ((skipped_count++))
     fi
+done
 
-    log "📊 Upload summary logged to: $LOG_FILE"
-    exit 0
-else
-    log "❌ Upload failed. Check log file at $LOG_FILE"
-    exit 1
-fi
+log "✅ Upload process complete."
+log "📄 Uploaded files: $uploaded_count"
+log "📁 Skipped files: $skipped_count"
+log "📊 Upload summary logged to: $LOG_FILE"
